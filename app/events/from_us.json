@@ -1,0 +1,25 @@
+{
+  "Records": [
+    {
+      "cf": {
+        "request": {
+          "uri": "/",
+          "headers": {
+            "cloudfront-viewer-country": [
+              {
+                "key": "CloudFront-Viewer-Country",
+                "value": "US"
+              }
+            ],
+            "cookie": [
+              {
+                "key": "cookie",
+                "value": "oxa_dev=something_here"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

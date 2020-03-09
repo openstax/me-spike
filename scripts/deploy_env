@@ -1,0 +1,26 @@
+#!/usr/bin/env python
+
+"""Deploys a me environment (first time or update)
+
+Usage:
+  deploy_env --env_name <env_name> [--no-build]
+
+Options:
+  -h --help              Show this help
+  --env_name <env_name>  The name of the environment to deploy
+  --no-build             Do not do an automatic build
+
+"""
+
+from docopt import docopt
+from codebase import Codebase
+from deployment import Deployment
+
+if __name__ == '__main__':
+    arguments = docopt(__doc__)
+
+if not arguments['--no-build']:
+    Codebase.build()
+
+Deployment(arguments["--env_name"]).deploy()
+

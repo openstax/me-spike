@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Me Spike'
+
+Parameters:
+  EnvName:
+    Type: String
+    Description: The name of the environment, e.g. 'staging', 'production'
+
+  CertificateArn:
+    Type: 'AWS::SSM::Parameter::Value<String>'
+    Default: '/certs/wildcard'
+
+  HostedZoneName:
+    Description: name of the hosted zone to use
+    Type: String
+    ConstraintDescription: must be a valid Route53 hosted zone domain; no period at end
+
+  Domain:
+    Description: Domain for the distribution, e.g. "openstax.org", configured in Route53
+    Type: String
+    ConstraintDescription: must be a valid domain name
+
+Conditions:
+  # Lambda@Edge functions need to be created in us-east-1; there might be a way
+  # to set up other resources in other regions using StackSets, but for now force
+  # the region with this condition.
+  WrongRegion: !Not [!Equals [!Ref 'AWS::Region', us-east-1]]
+
+Resources:
+
+  Dns:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Sub '${HostedZoneName}.'
+      RecordSets:
+        - Name: !Sub '${Domain}.'
+          Type: A
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2 # Indicates CloudFront
+            DNSName: !GetAtt 'Distribution.DomainName'
+
+  LambdaEdgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../app/src
+      Role: !GetAtt LambdaEdgeFunctionRole.Arn
+      Runtime: python3.7
+      Handler: lambda_function.lambda_handler
+      Timeout: 5
+      AutoPublishAlias: live
+      Tracing: Active
+
+  LambdaEdgeFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowLambdaServiceToAssumeRole"
+            Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+                - "edgelambda.amazonaws.com"
+      Policies:
+        - PolicyName: !Sub '${EnvName}-me-read-parameters'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParametersByPath
+                  - ssm:GetParameters
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:aws:ssm:*:${AWS::AccountId}:parameter/${EnvName}/*'
+                  - !Sub 'arn:aws:ssm:*:${AWS::AccountId}:parameter/external/*'
+        # Serverless might do this for us
+        # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html#sam-function-tracing
+        - PolicyName: demo-xray-lambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+            - Action:
+              - "xray:PutTraceSegments"
+              - "xray:PutTelemetryRecords"
+              Effect: Allow
+              Resource: "*"
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub '${EnvName}-me'
+        Aliases:
+          - !Ref 'Domain'
+        DefaultCacheBehavior:
+          LambdaFunctionAssociations:
+            - EventType: origin-request
+              LambdaFunctionARN: !Ref LambdaEdgeFunction.Version
+          AllowedMethods:
+            - 'HEAD'
+            - 'GET'
+          CachedMethods:
+            - 'HEAD'
+            - 'GET'
+          Compress: false
+          DefaultTTL: 0
+          MaxTTL: 0
+          MinTTL: 0
+          ForwardedValues:
+            Cookies:
+              Forward: 'all'
+            Headers:
+              - 'CloudFront-Viewer-Country'
+            QueryString: false
+          TargetOriginId: DummyOrigin
+          ViewerProtocolPolicy: 'https-only' # don't encourage HTTP
+        Origins:
+          - Id: DummyOrigin
+            DomainName: openstax.org
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+        DefaultRootObject: ''
+        Enabled: true
+        HttpVersion: 'http1.1'
+        IPV6Enabled: true
+        PriceClass: 'PriceClass_All'
+        ViewerCertificate:
+          AcmCertificateArn: !Ref 'CertificateArn'
+          SslSupportMethod: sni-only
+      Tags:
+        - Key: Environment
+          Value: !Ref 'EnvName'
+        - Key: Application
+          Value: MeSpike
+        - Key: Project
+          Value: MeSpike
+        - Key: Owner
+          Value: jpslav
+
+  # This resource will only be created when trying to deploy in a wrong region
+  YouAreInTheWrongRegion:
+    Type: "AWS::SSM::Parameter"
+    Condition: WrongRegion
+    Properties:
+      Name: '' # Leave name empty to force a fail
+      Type: String
+
+Outputs:
+  LambdaEdgeFunction:
+    Description: Lambda@Edge handler for content
+    Value: !Ref LambdaEdgeFunction.Version
+  DistributionId:
+    Description: 'Id for our cloudfront distribution'
+    Value: !Ref Distribution
+  RawDistributionDomainName:
+    Description: 'Domain name for our cloudfront distribution'
+    Value: !GetAtt Distribution.DomainName
+  DistributionDomainName:
+    Description: 'Domain name for our cloudfront distribution'
+    Value: !Ref Domain
+
